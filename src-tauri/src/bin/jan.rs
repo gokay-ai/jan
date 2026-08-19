@@ -20,6 +20,7 @@ use app_lib::core::cli::{
     cli_plugin_remove, cli_plugin_search, ResumeTarget, SessionFlags,
 };
 use std::fmt::Write as _;
+use std::path::PathBuf;
 
 // ── Top-level CLI ──────────────────────────────────────────────────────────
 
@@ -180,6 +181,17 @@ enum Commands {
         /// Reinstall even when already on the latest version
         #[arg(long, conflicts_with = "check")]
         force: bool,
+    },
+    /// Bundle a redacted diagnostics archive for a bug report
+    #[command(display_order = 6)]
+    BugReport {
+        /// Bundle this thread id (default: the most recently updated thread)
+        #[arg(long)]
+        thread: Option<String>,
+        /// Where threads live (the Jan data folder by default; pass a
+        /// project's `.jan/agent` dir to bundle a TUI thread from it)
+        #[arg(long)]
+        threads_base: Option<PathBuf>,
     },
 }
 
@@ -482,14 +494,16 @@ async fn main() {
     tauri_plugin_agent_tools::run_sandbox_helper_if_requested();
 
     // Pre-scan raw args for --verbose / -v before full parse so we can set
-    // the log level before any logging happens.
+    // the log level before any logging happens. The dual logger keeps
+    // stderr exactly where env_logger had it (`warn`, or `info` under -v) and
+    // additionally writes every info+ record to a rotating file under the
+    // data folder, so a hung or misbehaving run leaves a trail on disk
+    // without the user ever having to pass -v.
     let verbose = std::env::args().any(|a| a == "--verbose" || a == "-v");
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(if verbose {
-        "info"
-    } else {
-        "warn"
-    }))
-    .init();
+    app_lib::core::cli::file_log::init(
+        app_lib::core::app::commands::resolve_jan_data_folder(),
+        verbose,
+    );
 
     // Inject the logo at runtime so we can use ANSI styling.
     let logo = make_logo();
@@ -553,6 +567,28 @@ async fn main() {
         }
         Commands::Plugin { cmd } => handle_plugin(cmd).await,
         Commands::Update { check, force } => handle_update(check, force).await,
+        Commands::BugReport { thread, threads_base } => {
+            let base =
+                threads_base.unwrap_or_else(app_lib::core::app::commands::resolve_jan_data_folder);
+            match app_lib::core::cli::doctor::run_bug_report(&base, thread.as_deref()) {
+                Ok(report) => print_bug_report(&report),
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+}
+
+/// Print where the bug-report archive landed and confirm what was stripped.
+fn print_bug_report(report: &app_lib::core::cli::doctor::BugReport) {
+    println!("Bug report written to: {}", report.archive.display());
+    println!("Attach this file to the issue. Contents: version, environment, thread, and log tail.");
+    if report.stripped.is_empty() {
+        println!("No secrets detected in the bundled files.");
+    } else {
+        println!("Secrets stripped: {}", report.stripped.join(", "));
     }
 }
 

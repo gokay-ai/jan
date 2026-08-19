@@ -773,6 +773,14 @@ pub(crate) async fn stream_openai_chat_completions(
     body: &serde_json::Value,
     events: &mpsc::UnboundedSender<StreamEvent>,
 ) -> Result<serde_json::Value, String> {
+    // Breadcrumb for a stuck run: which model+endpoint the turn is talking to,
+    // written before any bytes flow so a hang is visible after the fact. The
+    // model id is the first message's `model`, never a credential.
+    let model = body.get("model").and_then(|v| v.as_str()).unwrap_or("?");
+    // The endpoint can carry a query string; credentials would live there, not
+    // in the path, so strip anything after `?` before logging.
+    let base_url = upstream_url.split('?').next().unwrap_or(upstream_url);
+    log::info!("stream: model={model} upstream={base_url}");
     let mut req_body = body.clone();
     if let Some(obj) = req_body.as_object_mut() {
         obj.insert("stream".to_string(), serde_json::json!(true));
@@ -1118,8 +1126,10 @@ async fn consume_openai_sse(
     if let Some(err) = acc.error.take() {
         let msg = format!("Upstream stream error: {err}");
         return Err(if is_context_overflow_body(&err) {
+            log::warn!("stream: context overflow ({url}) after {bytes} bytes");
             format!("[{CONTEXT_OVERFLOW_MARKER}] {msg}")
         } else {
+            log::warn!("stream: upstream error after {bytes} bytes: {err}");
             msg
         });
     }
