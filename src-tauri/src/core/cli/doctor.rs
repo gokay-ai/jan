@@ -61,7 +61,7 @@ impl Redactor {
             },
             Rule {
                 label: "sk/pk provider key",
-                re: Regex::new(r"(?i)\b(?:sk|pk)-(?:ant|proj|pat)?[A-Za-z0-9_\-]{16,}")
+                re: Regex::new(r"(?i)\b(?:sk|pk)-[A-Za-z0-9_\-]{16,}")
                     .expect("sk key regex"),
             },
             Rule {
@@ -269,6 +269,15 @@ mod tests {
             assert!(!out.contains("abc123def456"), "leaked bearer: {out}");
             assert!(out.contains("<redacted>"), "no redaction marker: {out}");
         }
+    }
+
+    #[test]
+    fn strips_openai_project_keys() {
+        let r = Redactor::new();
+        let secret = "request failed with sk-proj-abcdefghijklmnopqrstuvwx";
+        let (out, _) = redact_once(&r, secret);
+        assert!(!out.contains("sk-proj-abcdefghijklmnopqrstuvwx"), "leaked key: {out}");
+        assert!(out.contains("<redacted>"), "no redaction marker: {out}");
     }
 
     #[test]

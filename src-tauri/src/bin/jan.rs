@@ -20,7 +20,6 @@ use app_lib::core::cli::{
     cli_plugin_remove, cli_plugin_search, ResumeTarget, SessionFlags,
 };
 use std::fmt::Write as _;
-use std::path::PathBuf;
 
 // ── Top-level CLI ──────────────────────────────────────────────────────────
 
@@ -188,10 +187,6 @@ enum Commands {
         /// Bundle this thread id (default: the most recently updated thread)
         #[arg(long)]
         thread: Option<String>,
-        /// Where threads live (the Jan data folder by default; pass a
-        /// project's `.jan/agent` dir to bundle a TUI thread from it)
-        #[arg(long)]
-        threads_base: Option<PathBuf>,
     },
 }
 
@@ -567,9 +562,8 @@ async fn main() {
         }
         Commands::Plugin { cmd } => handle_plugin(cmd).await,
         Commands::Update { check, force } => handle_update(check, force).await,
-        Commands::BugReport { thread, threads_base } => {
-            let base =
-                threads_base.unwrap_or_else(app_lib::core::app::commands::resolve_jan_data_folder);
+        Commands::BugReport { thread } => {
+            let base = app_lib::core::app::commands::resolve_jan_data_folder();
             match app_lib::core::cli::doctor::run_bug_report(&base, thread.as_deref()) {
                 Ok(report) => print_bug_report(&report),
                 Err(e) => {
@@ -1115,6 +1109,16 @@ mod tests {
         let cli = Cli::parse_from(["jan", "login"]);
         assert!(matches!(cli.command, Some(Commands::Login)));
         assert!(Cli::try_parse_from(["jan", "login", "sk-key"]).is_err());
+    }
+
+    #[test]
+    fn bug_report_command_parses_only_thread_flag() {
+        let cli = Cli::parse_from(["jan", "bug-report", "--thread", "abc123"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::BugReport { thread }) if thread.as_deref() == Some("abc123")
+        ));
+        assert!(Cli::try_parse_from(["jan", "bug-report", "--threads-base", "."]).is_err());
     }
 
     /// Parse a `jan cli mcp <cmd> <extra...>` argv and pull out the subcommand.
