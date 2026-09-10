@@ -22,18 +22,25 @@ import { cn, getModelDisplayName } from '@/lib/utils'
 import { useTranslation } from '@/i18n/react-i18next-compat'
 import { useAppState } from '@/hooks/useAppState'
 import { paramsSettings, samplerKeysForProvider } from '@/lib/predefinedParams'
+import {
+  createRemoteCtxLenSetting,
+  isLocalEngineProvider,
+  REMOTE_CTX_LEN_DESCRIPTION,
+} from '@/lib/model-context-size'
 
 type ModelSettingProps = {
   provider: ProviderObject
   model: Model
 }
 
-export function ModelSetting({
-  model,
-  provider,
-}: ModelSettingProps) {
+/**
+ * Shared model-settings form + persistence, driven by both the header Sheet
+ * (ModelSetting) and the Cowork right rail (CoworkModelPanel). Keeping the
+ * handlers here avoids two copies of the debounced yaml-write / router-restart
+ * logic diverging.
+ */
+function useModelSettingControls(model: Model, provider: ProviderObject) {
   const { updateProvider } = useModelProvider()
-  const { t } = useTranslation()
   const serviceHub = useServiceHub()
   const setActiveModels = useAppState((state) => state.setActiveModels)
 
@@ -134,13 +141,19 @@ export function ModelSetting({
     if (!provider) return
 
     // Create a copy of the model with updated settings
+    const remoteCtxTemplate =
+      key === 'ctx_len' && !isLocalEngineProvider(provider.provider)
+        ? createRemoteCtxLenSetting(typeof value === 'boolean' ? '' : value)
+        : undefined
     const updatedModel = {
       ...model,
       settings: {
         ...model.settings,
         [key]: {
+          ...(remoteCtxTemplate ?? {}),
           ...(model.settings?.[key] != null ? model.settings?.[key] : {}),
           controller_props: {
+            ...(remoteCtxTemplate?.controller_props ?? {}),
             ...(model.settings?.[key]?.controller_props ?? {}),
             value: value,
           },
@@ -163,16 +176,18 @@ export function ModelSetting({
         models: updatedModels,
       })
 
-      // Call debounced stopModel only when updating settings that require restart,
-      // and only if the model is currently running
+      // Call debounced stopModel only when updating settings that require restart
+      // of a local engine. Remote/OpenAI-compatible endpoints have nothing to unload.
       if (
-        key === 'ctx_len' ||
-        key === 'ngl' ||
-        key === 'chat_template' ||
-        key === 'offload_mmproj' ||
-        key === 'batch_size' ||
-        key === 'cpu_moe' ||
-        key === 'n_cpu_moe'
+        isLocalEngineProvider(provider.provider) &&
+        (key === 'ctx_len' ||
+          key === 'ngl' ||
+          key === 'chat_template' ||
+          key === 'offload_mmproj' ||
+          key === 'batch_size' ||
+          key === 'cpu_moe' ||
+          key === 'n_cpu_moe' ||
+          key === 'n_cpu_ffn')
       ) {
         // Check if model is running before stopping it
         serviceHub
@@ -248,26 +263,28 @@ export function ModelSetting({
     true
   const fitCtxSetting = provider.settings?.find((s) => s.key === 'fit_ctx')
 
-  return (
-    <Sheet>
-      <SheetTrigger asChild>
-        <Button variant="ghost" size="icon-xs">
-          <IconSettings size={18} className="text-muted-foreground" />
-        </Button>
-      </SheetTrigger>
-      <SheetContent>
-        <SheetHeader>
-          <SheetTitle>
-            {t('common:modelSettings.title', {
-              modelId: getModelDisplayName(model),
-            })}
-          </SheetTitle>
-          <SheetDescription className='text-xs leading-normal'>
-            {t('common:modelSettings.description')}
-          </SheetDescription>
-        </SheetHeader>
+  return {
+    handleSettingChange,
+    handleTemplateKwargsChange,
+    handleEngineSettingChange,
+    fitEnabled,
+    fitCtxSetting,
+  }
+}
 
-        <div className="px-4 space-y-8 pb-4 flex-1 min-h-0 overflow-y-auto">
+/** The settings body, shared by the header Sheet and the Cowork rail. */
+export function ModelSettingFields({ model, provider }: ModelSettingProps) {
+  const { t } = useTranslation()
+  const {
+    handleSettingChange,
+    handleTemplateKwargsChange,
+    handleEngineSettingChange,
+    fitEnabled,
+    fitCtxSetting,
+  } = useModelSettingControls(model, provider)
+
+  return (
+    <div className="px-4 space-y-8 pb-4 flex-1 min-h-0 overflow-y-auto">
           {provider.provider === 'llamacpp' && (
             <SpecDraftPanel modelId={model.id} />
           )}
@@ -310,7 +327,27 @@ export function ModelSetting({
             </div>
           )}
           {(() => {
-            return Object.entries(model.settings || {})
+            const settings = model.settings || {}
+            const displaySettings =
+              !isLocalEngineProvider(provider.provider) && !settings.ctx_len
+                ? { ...settings, ctx_len: createRemoteCtxLenSetting('') }
+                : !isLocalEngineProvider(provider.provider) && settings.ctx_len
+                  ? {
+                      ...settings,
+                      ctx_len: {
+                        ...createRemoteCtxLenSetting(
+                          settings.ctx_len.controller_props?.value ?? ''
+                        ),
+                        ...settings.ctx_len,
+                        description: REMOTE_CTX_LEN_DESCRIPTION,
+                        controller_props: {
+                          ...createRemoteCtxLenSetting('').controller_props,
+                          ...settings.ctx_len.controller_props,
+                        },
+                      },
+                    }
+                  : settings
+            return Object.entries(displaySettings)
           .reduce<[string, unknown][]>((acc, entry) => {
             if (entry[0] === 'reasoning') return acc
             // Rendered by the dedicated ChatTemplateKwargs section above.
@@ -371,7 +408,31 @@ export function ModelSetting({
             )
           })
           })()}
-        </div>
+    </div>
+  )
+}
+
+export function ModelSetting({ model, provider }: ModelSettingProps) {
+  const { t } = useTranslation()
+  return (
+    <Sheet>
+      <SheetTrigger asChild>
+        <Button variant="ghost" size="icon-xs">
+          <IconSettings size={18} className="text-muted-foreground" />
+        </Button>
+      </SheetTrigger>
+      <SheetContent>
+        <SheetHeader>
+          <SheetTitle>
+            {t('common:modelSettings.title', {
+              modelId: getModelDisplayName(model),
+            })}
+          </SheetTitle>
+          <SheetDescription className="text-xs leading-normal">
+            {t('common:modelSettings.description')}
+          </SheetDescription>
+        </SheetHeader>
+        <ModelSettingFields model={model} provider={provider} />
       </SheetContent>
     </Sheet>
   )

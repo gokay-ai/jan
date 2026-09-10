@@ -13,6 +13,7 @@ import { DialogEditModel } from '@/containers/dialogs/EditModel'
 import { ImportLlamacppModelDialog } from '@/containers/dialogs/ImportLlamacppModelDialog'
 import { ImportMlxModelDialog } from '@/containers/dialogs/ImportMlxModelDialog'
 import { ModelSetting } from '@/containers/ModelSetting'
+import { LlamacppEngineInfo } from '@/containers/LlamacppEngineInfo'
 import { DialogDeleteModel } from '@/containers/dialogs/DeleteModel'
 import { DialogDeleteAllModels } from '@/containers/dialogs/DeleteAllModels'
 import { FavoriteModelAction } from '@/containers/FavoriteModelAction'
@@ -38,6 +39,10 @@ import { useModelLoad } from '@/hooks/useModelLoad'
 import { useAppState } from '@/hooks/useAppState'
 import { useShallow } from 'zustand/shallow'
 import { DialogAddModel } from '@/containers/dialogs/AddModel'
+import {
+  isLocalEngineProvider,
+  withRemoteCtxLen,
+} from '@/lib/model-context-size'
 import {
   providerHasRemoteApiKeys,
   providerRemoteApiKeyChain,
@@ -506,6 +511,10 @@ function ProviderDetail() {
         }))
       }
 
+      if (!isLocalEngineProvider(provider.provider)) {
+        newModels = newModels.map((m) => withRemoteCtxLen(m))
+      }
+
       if (supportsRemoteCatalog(provider)) {
         const importedModels = provider.models.filter((m) => m.imported)
         const importedIds = new Set(importedModels.map((m) => m.id))
@@ -648,6 +657,8 @@ function ProviderDetail() {
                   </span>
                 </div>
               )}
+
+            {isLlamacpp && <LlamacppEngineInfo />}
 
             {provider?.provider === 'mlx' && (
               <div className="flex items-start gap-2 rounded-md border border-main-view-fg/10 bg-main-view-fg/5 px-3 py-2 text-xs text-muted-foreground">
@@ -1112,8 +1123,7 @@ function ProviderDetail() {
                               provider={provider}
                               modelId={model.id}
                             />
-                            {model.settings && provider &&
-                              provider.provider === 'llamacpp' && (
+                            {provider && (
                               <ModelSetting provider={provider} model={model} />
                             )}
                             {((provider &&

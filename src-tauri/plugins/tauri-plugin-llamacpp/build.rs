@@ -13,10 +13,10 @@
 // vendor/llama.cpp and with engine::PINNED_* on the Rust side; the shim
 // re-exports llama_version()/llama_build_number() so a mismatch is caught at
 // runtime instead of producing a silently wrong engine.
-pub const LLAMA_CPP_TAG: &str = "b10621";
-pub const LLAMA_CPP_BUILD_NUMBER: u32 = 10621;
-pub const LLAMA_CPP_COMMIT: &str = "c1d0e7a004015f23bc0233470b747b596f29b264";
-pub const LLAMA_CPP_VERSION: &str = "0.3.0";
+pub const LLAMA_CPP_TAG: &str = "b10809";
+pub const LLAMA_CPP_BUILD_NUMBER: u32 = 10809;
+pub const LLAMA_CPP_COMMIT: &str = "5266f24da75dc449bd56cbed7addb9c8e4a6a73e";
+pub const LLAMA_CPP_VERSION: &str = "0.4.0";
 
 const COMMANDS: &[&str] = &[
     // Cleanup command
@@ -33,6 +33,7 @@ const COMMANDS: &[&str] = &[
     "start_engine",
     "stop_engine",
     "get_engine_info",
+    "get_engine_version",
     "reload_engine_models",
     "engine_devices",
     "force_stop_engine",
@@ -179,12 +180,19 @@ mod engine {
         ("engine-metal", "-DGGML_METAL=ON"),
     ];
 
+    /// The GPUs a HIP build targets when JAN_ENGINE_HIP_TARGETS is unset: the
+    /// list janhq/llama.cpp's menlo-build.yml shipped for the previous engine.
+    /// Without an explicit list cmake asks `rocm_agent_enumerator`, which on a
+    /// GPU-less build host yields nothing or the compiler's single default.
+    const HIP_TARGETS: &str = "gfx908;gfx90a;gfx942;gfx1030;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1200;gfx1201";
+
     pub fn build() {
         println!("cargo:rerun-if-changed=shim/jan_llama_shim.cpp");
         println!("cargo:rerun-if-changed=shim/jan_llama_shim.h");
         println!("cargo:rerun-if-env-changed=JAN_LLAMA_PREBUILT_DIR");
         println!("cargo:rerun-if-env-changed=JAN_LLAMA_CPP_DIR");
         println!("cargo:rerun-if-env-changed=JAN_ENGINE_CUDA_ARCHS");
+        println!("cargo:rerun-if-env-changed=JAN_ENGINE_HIP_TARGETS");
         println!("cargo:rerun-if-env-changed=JAN_ENGINE_BUILD_LOG");
         println!("cargo:rerun-if-env-changed=JAN_ENGINE_BUILD_DIR");
 
@@ -380,6 +388,8 @@ mod engine {
             src.join("ggml").display()
         ));
         cfg.arg(format!("-DCMAKE_INSTALL_PREFIX={}", prefix.display()));
+        // Ensure libraries are installed in lib, not in platform specific dirs (e.g. lib64 on Fedora/RHEL).
+        cfg.arg("-DCMAKE_INSTALL_LIBDIR=lib");
         cfg.args([
             "-DCMAKE_BUILD_TYPE=Release",
             "-DCMAKE_POSITION_INDEPENDENT_CODE=ON",
@@ -453,6 +463,19 @@ mod engine {
                 println!("cargo:rerun-if-env-changed=JAN_ENGINE_CUDA_ARCHS");
                 cfg.arg(format!("-DCMAKE_CUDA_ARCHITECTURES={archs}"));
             }
+        }
+        if feature_enabled("engine-hip") {
+            let targets = env::var("JAN_ENGINE_HIP_TARGETS").unwrap_or_default();
+            let targets = targets.trim();
+            let targets = if targets.is_empty() {
+                HIP_TARGETS
+            } else {
+                targets
+            };
+            cfg.arg(format!("-DGPU_TARGETS={targets}"));
+            // rocWMMA flash attention, as the previous engine shipped it; needs
+            // rocwmma-dev, which check-engine-toolchain.sh asserts.
+            cfg.arg("-DGGML_HIP_ROCWMMA_FATTN=ON");
         }
         if feature_enabled("engine-cuda") {
             // NCCL is multi-GPU collective communication for distributed
