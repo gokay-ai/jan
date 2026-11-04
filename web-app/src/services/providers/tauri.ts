@@ -8,6 +8,7 @@ import { EngineManager, SettingComponentProps } from '@janhq/core'
 import { ModelCapabilities } from '@/types/models'
 import { MLX_DEFAULT_CTX_LEN, modelSettings } from '@/lib/predefined'
 import { fetch as fetchTauri } from '@tauri-apps/plugin-http'
+import { fetchWithoutTauriWebviewOrigin } from '@/lib/omitTauriWebviewOrigin'
 import { invoke } from '@tauri-apps/api/core'
 import { DefaultProvidersService } from './default'
 import { getModelCapabilities } from '@/lib/models'
@@ -21,8 +22,9 @@ import { extensionProviderFetch } from '@/lib/extensions/providers'
 
 export class TauriProvidersService extends DefaultProvidersService {
   fetch(): typeof fetch {
-    // Tauri implementation uses Tauri's fetch to avoid CORS issues
-    return fetchTauri as typeof fetch
+    // Tauri fetch avoids CORS; empty Origin omits the webview host so
+    // CORS-strict backends (Ollama) don't 403. See omitTauriWebviewOrigin.
+    return fetchWithoutTauriWebviewOrigin(fetchTauri as typeof fetch)
   }
 
   async getProviders(): Promise<ModelProvider[]> {
@@ -157,7 +159,7 @@ export class TauriProvidersService extends DefaultProvidersService {
       // A contributed provider is reached only on its extension's checked
       // network path, and never presents itself as the app.
       const extensionFetch = extensionProviderFetch(provider, 'whole')
-      const fetchImpl: typeof globalThis.fetch = extensionFetch ?? fetchTauri
+      const fetchImpl: typeof globalThis.fetch = extensionFetch ?? this.fetch()
       const keyChain = providerRemoteApiKeyChain(provider)
       const keyAttempts: (string | undefined)[] =
         keyChain.length > 0 ? keyChain : [undefined]
@@ -169,14 +171,6 @@ export class TauriProvidersService extends DefaultProvidersService {
         const key = keyAttempts[ki]
         const headers: Record<string, string> = {
           'Content-Type': 'application/json',
-        }
-
-        if (
-          !extensionFetch &&
-          (provider.base_url.includes('localhost:') ||
-            provider.base_url.includes('127.0.0.1:'))
-        ) {
-          headers['Origin'] = 'tauri://localhost'
         }
 
         if (key) {
